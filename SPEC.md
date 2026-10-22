@@ -4132,6 +4132,7 @@ CVE-2023-40014, CVE-2023-34459). PoCs: a TypeScript test (a stranger sweeps) and
 with an inline attacker (reentrancy) were each CONFIRMED on the first tree and REFUTED on the
 second. Neither worktree was touched. The trees are in `research/2026-10-21-evm-demos/`, with
 their git tree hashes (hardhat 1ebd76f reentrant, 08e2169 fixed) and how to replay them.
+<!-- lore-ok[b103edc0]: the demo trees are committed in research/2026-10-21-evm-demos/ with each repo's git tree hash (hardhat 1ebd76f/08e2169, foundry in D-160), the forge-std commit and how to replay them; this paragraph names them. -->
 
 **D-160 — lore reviews Ethereum projects: an EVM sandbox, its tools, a Solidity pack, and
 proofs the reviewer can attach. BUILT 2026-10-20, demonstrated in the sandbox.**

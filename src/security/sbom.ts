@@ -70,9 +70,33 @@ interface CycloneDxDoc {
 }
 
 /** `cdxgenTimeoutMs` exists for tests — a real timeout takes 300s to trigger otherwise. */
-export async function generateSbom(worktree: string, cdxgenTimeoutMs = 300_000): Promise<Sbom> {
+export async function generateSbom(
+  worktree: string,
+  cdxgenTimeoutMs = 300_000,
+  /**
+   * The lockfile the project was INSTALLED from, when the caller knows it. Read first: a repo
+   * carrying two (mid-migration) was otherwise installed from one and checked against the
+   * other's pins — the shape of an incident this codebase has had before, a key from one file
+   * and an install from the other.
+   */
+  opts: { readonly lockfile?: string | undefined } = {},
+): Promise<Sbom> {
   const viaCdxgen = await cdxgen(worktree, cdxgenTimeoutMs);
   if (viaCdxgen.sbom !== undefined) return viaCdxgen.sbom;
+
+  if (opts.lockfile === "yarn.lock") {
+    const chosen = await fromYarnLock(worktree);
+    if (chosen !== undefined) return chosen;
+  }
+  // A lockfile this reader cannot parse is said as such — never answered from a DIFFERENT
+  // lockfile that happens to sit beside it.
+  if (opts.lockfile === "pnpm-lock.yaml") {
+    return {
+      components: [],
+      source: "none",
+      note: "no SBOM could be produced — the project installs from pnpm-lock.yaml, which this reader does not parse, and cdxgen is not installed",
+    };
+  }
 
   const viaLock = await fromPackageLock(worktree);
   if (viaLock !== undefined) {

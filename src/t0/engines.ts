@@ -469,7 +469,9 @@ export async function runEngine(worktree: string, engine: T0Engine, scope?: Scop
     // (`osv`) still reports them all. Submodules are direct by construction (foundry's lib/).
     const lockfile = fw.lockfile;
     try {
-      const bom = await generateSbom(worktree);
+      // The lockfile the sandbox installs from (`detectEvm`), so the pins asked about are the
+      // pins that were built.
+      const bom = await generateSbom(worktree, undefined, { lockfile });
       const direct = bom.components.filter((c) => c.transitive !== true);
       const findings: Finding[] = direct.length === 0 ? [] : [...toFindings(await queryComponents(direct))];
       for (const link of await gitlinks(worktree)) findings.push(...commitToFindings(link.path, link.commit, await queryCommit(link.commit)));

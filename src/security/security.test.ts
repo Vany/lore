@@ -77,6 +77,28 @@ describe("generateSbom", () => {
     expect(sbom.components.every((c) => c.transitive === undefined), "unknown, never a guess").toBe(true);
   });
 
+  // ONE choice of lockfile: the one the install used. A repo carrying both (mid-migration)
+  // was installed from yarn.lock and checked against package-lock.json's stale pins.
+  it("reads the lockfile it is told to, when a repo carries two", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "yarn.lock"), yarnLock);
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "@openzeppelin/contracts": "4.9.0" } }));
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/@openzeppelin/contracts": { version: "4.8.0" } } }));
+    const sbom = await generateSbom(dir, undefined, { lockfile: "yarn.lock" });
+    expect(sbom.components.find((c) => c.name === "@openzeppelin/contracts")?.version).toBe("4.9.0");
+  });
+
+  it("never answers for a pnpm project from a package-lock that happens to sit beside it", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/x": { version: "1.0.0" } } }));
+    const sbom = await generateSbom(dir, undefined, { lockfile: "pnpm-lock.yaml" });
+    expect([sbom.source, sbom.components.length]).toStrictEqual(["none", 0]);
+    expect(sbom.note).toMatch(/pnpm-lock\.yaml/);
+  });
+
   it("discloses a lockfileVersion-1 lockfile as unread, not as zero dependencies", async () => {
     writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
     chmodSync(join(binDir, "npx"), 0o755);
