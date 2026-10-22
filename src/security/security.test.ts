@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLAIM_MAX } from "../core/finding.ts";
@@ -53,6 +53,30 @@ describe("generateSbom", () => {
   // "packages" key at all — deps live under nested "dependencies" instead, a
   // shape this reader was never written to walk. `Object.entries(undefined ??
   // {})` used to read that identically to a real, empty v2/v3 lockfile.
+  // yarn.lock records no depth, so directness comes from the manifests. In a workspaces
+  // monorepo the root lists only `workspaces`; read alone, every package looked transitive and
+  // evm-advisories, which asks about direct ones, silently asked about none.
+  const yarnLock = '# yarn lockfile v1\n\n"@openzeppelin/contracts@4.9.0":\n  version "4.9.0"\n\nchalk@^2.4.2:\n  version "2.4.2"\n';
+  it("counts a workspace package's own dependencies as direct", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "yarn.lock"), yarnLock);
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ private: true, workspaces: ["packages/*"] }));
+    mkdirSync(join(dir, "packages", "contracts"), { recursive: true });
+    writeFileSync(join(dir, "packages", "contracts", "package.json"), JSON.stringify({ dependencies: { "@openzeppelin/contracts": "4.9.0" } }));
+    const sbom = await generateSbom(dir);
+    expect(sbom.components.map((c) => [c.name, c.transitive])).toStrictEqual([["@openzeppelin/contracts", false], ["chalk", true]]);
+  });
+  it("says directness is unknown, not 'none', when the root package.json does not parse", async () => {
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(binDir, "npx"), 0o755);
+    writeFileSync(join(dir, "yarn.lock"), yarnLock);
+    writeFileSync(join(dir, "package.json"), "{ not json");
+    const sbom = await generateSbom(dir);
+    expect(sbom.incomplete).toMatch(/package\.json/);
+    expect(sbom.components.every((c) => c.transitive === undefined), "unknown, never a guess").toBe(true);
+  });
+
   it("discloses a lockfileVersion-1 lockfile as unread, not as zero dependencies", async () => {
     writeFileSync(join(binDir, "npx"), "#!/bin/sh\nexit 1\n");
     chmodSync(join(binDir, "npx"), 0o755);

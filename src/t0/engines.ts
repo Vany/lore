@@ -19,7 +19,7 @@ import type { Finding, Severity } from "../core/finding.ts";
 import type { T0Engine } from "../core/review-type.ts";
 import { gitlinks } from "../git/repo.ts";
 import { commitToFindings, queryCommit, queryComponents, toFindings } from "../security/osv.ts";
-import { detectEvm } from "./evm-detect.ts";
+import { detectEvm, isEvmProject } from "./evm-detect.ts";
 import { generateSbom } from "../security/sbom.ts";
 import { runTool } from "./exec.ts";
 import { SKIP_DIRS } from "./sandbox.ts";
@@ -467,7 +467,7 @@ export async function runEngine(worktree: string, engine: T0Engine, scope?: Scop
     // about what the project depends on by name: OpenZeppelin, an upgrades plugin, an oracle
     // library. Transitive advisories are counted for the operator, and a security review
     // (`osv`) still reports them all. Submodules are direct by construction (foundry's lib/).
-    const lockfile = fw.kind === "hardhat" ? fw.lockfile : undefined;
+    const lockfile = fw.lockfile;
     try {
       const bom = await generateSbom(worktree);
       const direct = bom.components.filter((c) => c.transitive !== true);
@@ -478,7 +478,15 @@ export async function runEngine(worktree: string, engine: T0Engine, scope?: Scop
       return {
         engine,
         findings: findings.map((f) => (lockfile !== undefined && f.file === "package-lock.json" ? { ...f, file: lockfile } : f)),
-        ...(bom.source === "none" ? { unavailable: bom.note ?? "the dependency tree could not be enumerated" } : bom.incomplete !== undefined ? { unavailable: bom.incomplete } : {}),
+        ...(bom.source === "none"
+          ? { unavailable: bom.note ?? "the dependency tree could not be enumerated" }
+          : bom.incomplete !== undefined
+            ? { unavailable: bom.incomplete }
+            : direct.length === 0 && bom.components.length > 0
+              // Said, never silent: packages are pinned and none is a dependency the project
+              // names, so nothing was asked about — not "no advisories".
+              ? { unavailable: `evm-advisories: none of the ${String(bom.components.length)} pinned package(s) is a dependency the project names, so no advisory was checked` }
+              : {}),
       };
     } catch (e) {
       return { engine, findings: [], unavailable: `evm-advisories: OSV could not be queried (${e instanceof Error ? e.message : String(e)}) — no advisory was checked` };
@@ -963,7 +971,8 @@ async function semgrep(worktree: string, scope?: Scope): Promise<EngineOutcome> 
       // The Solidity pack, when the scope holds contracts: p/security-audit has no Solidity
       // rules of note, and p/smart-contracts is semgrep's own set for them (checked
       // 2026-10-20: reentrancy, access control, oracle and callback rules among them).
-      ...((scope?.some((f) => f.endsWith(".sol")) ?? false) || existsSync(join(worktree, "foundry.toml"))
+      // The same detection as everywhere else (`evm-detect.ts`) — foundry OR hardhat.
+      ...((scope?.some((f) => f.endsWith(".sol")) ?? false) || isEvmProject(worktree)
         ? ["--config", "p/smart-contracts"]
         : []),
       "--json", "--quiet", "--metrics", "off", ...scopePaths(scope),

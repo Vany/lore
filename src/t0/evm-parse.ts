@@ -61,6 +61,16 @@ export function parseForgeBuild(stdout: string): readonly Finding[] | undefined 
   return out;
 }
 
+/**
+ * A test that failed because it needed a network the sandbox does not have — a fork, an RPC —
+ * for forge AND mocha: one definition, because two drifted (mocha's lacked forge's words, and
+ * node's own offline failures, undici's "fetch failed" and hardhat's "Cannot connect to the
+ * network", matched neither). Such a test did not run; raised as a failure it would stand as a
+ * HIGH on every round.
+ */
+const TEST_NEEDS_NETWORK =
+  /fork|rpc|could not instantiate|connection refused|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|getaddrinfo|dns|fetch failed|cannot connect to the network|network/i;
+
 /** One forge test result that did not pass, and whether the sandbox, not the code, failed it. */
 export interface ForgeTestFailure {
   readonly file: string;
@@ -91,7 +101,7 @@ export function parseForgeTest(stdout: string): { readonly failures: readonly Fo
       const reason = typeof r["reason"] === "string" ? r["reason"] : "failed with no reason given";
       failures.push({
         file, contract, test, reason,
-        needsNetwork: /fork|rpc|could not instantiate|connection refused|dns|network/i.test(reason),
+        needsNetwork: TEST_NEEDS_NETWORK.test(reason),
       });
     }
   }
@@ -287,7 +297,7 @@ export function parseMocha(json: string, root = "/work/"): { readonly ran: numbe
     const err = isObj(f["err"]) ? f["err"] : {};
     const message = String(err["message"] ?? "failed with no message");
     const file = String(f["file"] ?? "test").replace(root, "");
-    failures.push({ file, title: String(f["fullTitle"] ?? f["title"] ?? "?"), message, needsNetwork: /fork|rpc|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|getaddrinfo/i.test(message) });
+    failures.push({ file, title: String(f["fullTitle"] ?? f["title"] ?? "?"), message, needsNetwork: TEST_NEEDS_NETWORK.test(message) });
   }
   return { ran: Number(d["stats"]["tests"] ?? 0), passed: Number(d["stats"]["passes"] ?? 0), failures };
 }
@@ -322,6 +332,12 @@ export interface SolcBuild {
   readonly version: string;
   readonly optimizer: boolean;
   readonly viaIR: boolean;
+  /**
+   * The file a finding about this build is anchored on, when a PRAGMA chose the compiler
+   * rather than the config: one of the project's own sources this build compiled. Absent when
+   * the config pins the compiler, and the finding is anchored on the config.
+   */
+  readonly anchor?: string;
 }
 
 interface SolcBug {
@@ -368,7 +384,7 @@ export function matchSolcBugs(
       out.set(
         key,
         finding({
-          file: configFile,
+          file: b.anchor ?? configFile,
           severity,
           claim: ruleClaim(`solc-bug-${name}`, `solc ${b.version} has a known ${sev}-severity bug: ${(bug.summary ?? name).replace(/``/g, "`")}`, "solc-bugs"),
           evidence: `${bug.uid ?? name} (${sev}) affects solc ${b.version}, which this project compiles with${b.optimizer ? " (optimizer on)" : ""}${b.viaIR ? " (via IR)" : ""}. ${bug.link ?? ""}`.trim().slice(0, 1500),

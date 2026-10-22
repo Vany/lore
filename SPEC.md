@@ -4091,6 +4091,11 @@ D-160; what differs is how a hardhat tree is made runnable, and two checks both 
   (`--hardhat-ignore-compile` — recompiling with `--force` needs the network). aderyn runs in
   phase 1 for both frameworks, because it fetches its own solc. On linux-arm64 hardhat compiles
   with its wasm solc.
+- **A fork or RPC test did not run**, for forge and mocha by one vocabulary (node's offline
+  "fetch failed" and hardhat's "Cannot connect to the network" included).
+- **semgrep's Solidity advice is not raised**: `p/smart-contracts` rules under
+  `solidity.performance` and `solidity.best-practice` are gas and style tips, counted for the
+  operator. The pack itself is applied by the same detection as everything else.
 - **Tests through mocha's JSON reporter**, by a wrapper config written into the SCRATCH copy
   (`hardhat.lore.config.ts` / `.cjs`) — never the worktree. An `.mjs` config is reported as
   tests that did not run.
@@ -4098,14 +4103,18 @@ D-160; what differs is how a hardhat tree is made runnable, and two checks both 
   `bugs_by_version.json`, pinned at the v0.8.37 release, baked into the image) against the
   exact compilers in build-info, with the optimizer/viaIR conditions applied. A bug needs a
   pattern in the code as well as the compiler, so these are questions, not proof: a high bug
-  is raised at medium, a medium at low, low and very-low bugs not at all. Anchored on the
-  compiler config, so they are INHERITED (D-68) unless the branch changes it.
+  is raised at medium, a medium at low, low and very-low bugs not at all. Anchored on what
+  CHOSE the compiler — the config when it pins one (foundry's `solc`, or a hardhat config that
+  compiled with a single version), otherwise a source that build compiled, since a pragma did —
+  so they are INHERITED (D-68) unless the branch changes that file. foundry builds are run with
+  `--build-info`, which it does not write by default.
 - **`evm-advisories`** (both frameworks, on the service): OSV for the project's DIRECT
-  dependencies and its submodules. Direct only, measured: on the demo all 34 advisories were in
+  dependencies — named by the root manifest or a workspace package's; unknown directness
+  queries everything and says so — and its submodules. Direct only, measured: on the demo all 34 advisories were in
   hardhat's own transitive tooling (undici, ws, adm-zip), none in code that reaches the chain.
   `yarn.lock` (v1 and berry) is read now, since the deployment has no cdxgen and a yarn
-  project was otherwise "could not be enumerated". Anchored on the lockfile; inherited unless
-  the branch changes it. A SECURITY review (`osv`) still reports the whole tree.
+  project was otherwise "could not be enumerated". Anchored on the lockfile actually present —
+  a foundry repo's too — and inherited unless the branch changes it. A SECURITY review (`osv`) still reports the whole tree.
 - **PoCs in a hardhat project** may be a hardhat test (its own language, mocha + chai) or a
   forge test. A hardhat test can deploy only contracts the project compiles, so an exploit
   needing an attacker contract must be a forge test; lore runs that with forge pointed at the

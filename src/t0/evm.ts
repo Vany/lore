@@ -211,7 +211,7 @@ export async function sandboxedEvm(worktree: string, base: SandboxConfig, engine
         out.push(parsed === undefined ? didNotRun("solhint", "solhint", r) : { engine: "solhint", findings: parsed });
       }
     }
-    if (rest.includes("solc-bugs")) out.push(await solcBugs(fw, offline));
+    if (rest.includes("solc-bugs")) out.push(await solcBugs(fw, offline, worktree));
     return out;
   });
 }
@@ -245,7 +245,7 @@ async function runTests(fw: EvmFramework, offline: (s: string) => Promise<ToolRe
 }
 
 /** Read inside the sandbox: every build-info's compiler and settings, plus the baked bug list. */
-const SOLC_BUGS_SCRIPT = `
+export const SOLC_BUGS_SCRIPT = `
 const fs = require("fs"), path = require("path");
 const dirs = ["artifacts/build-info", "out/build-info"].filter((d) => fs.existsSync(d));
 const builds = [];
@@ -254,16 +254,23 @@ for (const d of dirs) for (const f of fs.readdirSync(d)) {
   const j = JSON.parse(fs.readFileSync(path.join(d, f), "utf8"));
   const v = j.solcVersion ?? (j.solcLongVersion ?? "").split("+")[0];
   const s = (j.input ?? {}).settings ?? {};
-  if (v) builds.push({ version: v, optimizer: !!(s.optimizer ?? {}).enabled, viaIR: !!s.viaIR });
+  // The project's own first source this build compiled — not a dependency's.
+  // [/] not \/: this text is a template literal, where "\/" collapses to "/" and the rest of
+  // the line became a comment — found by the first live run.
+  // A PROJECT file: hardhat names npm imports by package path ("@openzeppelin/contracts/…"),
+  // not under node_modules, so only a source that exists in the tree itself qualifies.
+  const own = Object.keys((j.input ?? {}).sources ?? {}).find((p) => fs.existsSync(p) && !/^(lib|node_modules|dependencies)[/]/.test(p) && !p.includes("/node_modules/"));
+  if (v) builds.push({ version: v, optimizer: !!(s.optimizer ?? {}).enabled, viaIR: !!s.viaIR, source: own });
 }
 process.stdout.write(JSON.stringify({ builds,
   bugs: JSON.parse(fs.readFileSync("/opt/solc-bugs/bugs.json", "utf8")),
   byVersion: JSON.parse(fs.readFileSync("/opt/solc-bugs/bugs_by_version.json", "utf8")) }));
 `;
 
-async function solcBugs(fw: EvmFramework, offline: (s: string) => Promise<ToolResult>): Promise<EngineOutcome> {
+async function solcBugs(fw: EvmFramework, offline: (s: string) => Promise<ToolResult>, worktree: string): Promise<EngineOutcome> {
+  const configText = () => readFile(join(worktree, fw.config), "utf8").catch(() => "");
   const r = await offline(`node -e ${q(SOLC_BUGS_SCRIPT)}`);
-  let parsed: { builds?: SolcBuild[]; bugs?: unknown[]; byVersion?: Record<string, { bugs?: string[] }> } | undefined;
+  let parsed: { builds?: (SolcBuild & { source?: string })[]; bugs?: unknown[]; byVersion?: Record<string, { bugs?: string[] }> } | undefined;
   try {
     parsed = JSON.parse(r.stdout) as typeof parsed;
   } catch {
@@ -271,7 +278,18 @@ async function solcBugs(fw: EvmFramework, offline: (s: string) => Promise<ToolRe
   }
   if (parsed?.builds === undefined || parsed.bugs === undefined || parsed.byVersion === undefined) return didNotRun("solc-bugs", "the compiler-bug check", r);
   if (parsed.builds.length === 0) return { engine: "solc-bugs", findings: [], unavailable: "solc-bugs: the build left no build-info, so which compiler ran is unknown and nothing was checked" };
-  const distinct = [...new Map(parsed.builds.map((b) => [`${b.version}/${String(b.optimizer)}/${String(b.viaIR)}`, b])).values()];
+  // WHO PICKED THE COMPILER decides the anchor. The config does when it pins one — foundry's
+  // `solc`/`solc_version`, or a hardhat config that compiled with a single version; otherwise
+  // a pragma did, and the finding belongs to a source that build compiled, so a branch moving
+  // a pragma onto a buggy compiler is not read as inheriting the bug (D-68).
+  const versions = new Set(parsed.builds.map((b) => b.version));
+  const pinned =
+    fw.kind === "foundry" ? /^\s*solc(?:_version)?\s*=/m.test(await configText()) : versions.size === 1;
+  const builds = parsed.builds.map((b) => ({
+    version: b.version, optimizer: b.optimizer, viaIR: b.viaIR,
+    ...(!pinned && b.source !== undefined ? { anchor: b.source } : {}),
+  }));
+  const distinct = [...new Map(builds.map((b) => [`${b.version}/${String(b.optimizer)}/${String(b.viaIR)}/${b.anchor ?? ""}`, b])).values()];
   return { engine: "solc-bugs", findings: matchSolcBugs(distinct, parsed.bugs as Parameters<typeof matchSolcBugs>[1], parsed.byVersion, fw.config) };
 }
 

@@ -150,6 +150,25 @@ describe("hardhat test (mocha JSON)", () => {
   });
 });
 
+// ONE vocabulary for "this test needed a network", forge and mocha alike: a fork or RPC test
+// cannot pass offline, and raised as a failure it would stand as a HIGH on every round.
+describe("a test that needed the network", () => {
+  const mocha = (message: string) =>
+    parseMocha(JSON.stringify({ stats: { tests: 1, passes: 0, failures: 1 }, failures: [{ fullTitle: "t", file: "/work/test/a.ts", err: { message } }] }))?.failures[0]?.needsNetwork;
+  const forge = (reason: string) =>
+    parseForgeTest(JSON.stringify({ "test/A.t.sol:A": { test_results: { "test_x()": { status: "Failure", reason } } } }))?.failures[0]?.needsNetwork;
+  it("is recognised the same way by both runners", () => {
+    for (const m of ["fetch failed", "Cannot connect to the network localhost", "getaddrinfo ENOTFOUND eth-mainnet.g.alchemy.com", "could not instantiate forked environment"]) {
+      expect(mocha(m), `mocha: ${m}`).toBe(true);
+      expect(forge(m), `forge: ${m}`).toBe(true);
+    }
+  });
+  it("is not claimed for an ordinary assertion", () => {
+    expect(mocha("expected 0 to equal 1.")).toBe(false);
+    expect(forge("balance kept: 0 != 1")).toBe(false);
+  });
+});
+
 describe("known compiler bugs", () => {
   const bugs = [
     { uid: "SOL-1", name: "HighWithOptimizer", summary: "a high one", severity: "high", conditions: { optimizer: true } },
@@ -167,6 +186,17 @@ describe("known compiler bugs", () => {
     ]);
     expect(f[1]?.claim).toContain("a `medium` one");
   });
+  // When a pragma, not the config, picks the compiler, the finding belongs to the source that
+  // picked it: anchored on an untouched config, a branch that moved a pragma onto a buggy
+  // compiler would read as inheriting the bug (D-68).
+  it("anchors on the source a build compiled when the build says so, on the config otherwise", () => {
+    const f = matchSolcBugs(
+      [{ version: "0.8.19", optimizer: true, viaIR: false, anchor: "src/Vault.sol" }, { version: "0.8.28", optimizer: false, viaIR: false }],
+      bugs, byVersion, "foundry.toml",
+    );
+    expect(f.map((x) => x.file)).toStrictEqual(["src/Vault.sol", "src/Vault.sol", "foundry.toml"]);
+  });
+
   it("rules out a bug whose condition the build does not meet", () => {
     const f = matchSolcBugs([{ version: "0.8.19", optimizer: false, viaIR: false }], bugs, byVersion, "foundry.toml");
     expect(f.map((x) => x.claim.split(":")[0])).toStrictEqual(["solc-bug-MediumAlways"]);
@@ -191,5 +221,15 @@ describe("why an install failed", () => {
   });
   it("blames the branch for a lockfile that does not match", () => {
     expect(installFailure("error Your lockfile needs to be updated, but yarn was run with `--frozen-lockfile`.")).toBe("branch");
+  });
+});
+
+// The compiler-bug script runs inside the sandbox from a template literal, where escapes
+// collapse; it once compiled to a syntax error that only a live run could show. Compile it here.
+describe("the in-sandbox compiler-bug script", () => {
+  it("is valid JavaScript as it will be run", async () => {
+    const { SOLC_BUGS_SCRIPT } = await import("./evm.ts");
+    expect(SOLC_BUGS_SCRIPT).toMatch(/build-info/);
+    expect(() => new Function("require", "process", SOLC_BUGS_SCRIPT)).not.toThrow();
   });
 });

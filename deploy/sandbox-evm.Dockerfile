@@ -80,20 +80,28 @@ RUN npm i -g --no-audit --no-fund "solhint@${SOLHINT_VERSION}" pnpm@10.34.7 && s
 
 # Declared HERE, not at the top: an ARG declared above a cached step invalidates it, and the
 # first time that happened the rebuild re-downloaded foundry's 130 MB over a crawling link.
+# BY COMMIT and BY HASH, like everything else here: a tag can be moved by anyone who can push,
+# and a moved forge-std or bug list would change every hardhat PoC's compile and every
+# solc-bugs report with nothing in this repository changing.
 ARG FORGE_STD_VERSION=v1.17.0
+ARG FORGE_STD_COMMIT=f3dae6e6ee381f25eb6a246f7da9b85c91a68219
 # The Solidity team's own list of known compiler bugs, at a pinned release: it covers every
 # compiler up to that release, which is what `solc-bugs` matches a project's versions against.
 ARG SOLC_BUGS_TAG=v0.8.37
+ARG SOLC_BUGS_SHA256=ee8e0a9d7b2b54914eda10f4533d3c2f1136176bd99df2b2abb4c25a4548a582
+ARG SOLC_BUGS_BY_VERSION_SHA256=e67aba151b323ead83f8816f7bae875f04f1eb4defdc9895133b89f8712631f1
 
 # forge-std, offline: a forge PoC in a HARDHAT project has no lib/ of its own to import it from.
 RUN git clone --quiet --depth 1 --branch "${FORGE_STD_VERSION}" https://github.com/foundry-rs/forge-std /opt/forge-std \
+ && [ "$(git -C /opt/forge-std rev-parse HEAD)" = "${FORGE_STD_COMMIT}" ] \
+ || { echo "forge-std ${FORGE_STD_VERSION} is not the pinned commit ${FORGE_STD_COMMIT}" >&2; exit 1; } \
  && rm -rf /opt/forge-std/.git
 
 RUN mkdir -p /opt/solc-bugs \
- && for f in bugs.json bugs_by_version.json; do \
-      ${CURL} -o "/opt/solc-bugs/${f}" "https://raw.githubusercontent.com/argotorg/solidity/${SOLC_BUGS_TAG}/docs/${f}"; \
-    done \
- && python3 -c 'import json; [json.load(open(f"/opt/solc-bugs/{f}")) for f in ("bugs.json","bugs_by_version.json")]'
+ && ${CURL} -o /opt/solc-bugs/bugs.json "https://raw.githubusercontent.com/argotorg/solidity/${SOLC_BUGS_TAG}/docs/bugs.json" \
+ && ${CURL} -o /opt/solc-bugs/bugs_by_version.json "https://raw.githubusercontent.com/argotorg/solidity/${SOLC_BUGS_TAG}/docs/bugs_by_version.json" \
+ && echo "${SOLC_BUGS_SHA256}  /opt/solc-bugs/bugs.json" | sha256sum -c - \
+ && echo "${SOLC_BUGS_BY_VERSION_SHA256}  /opt/solc-bugs/bugs_by_version.json" | sha256sum -c -
 
 RUN git config --system user.email "sandbox@lore.invalid" \
  && git config --system user.name  "lore sandbox" \

@@ -13,7 +13,7 @@
  * SPEC: research/security-review.md §4.1
  */
 
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseYarnLock } from "./yarn-lock.ts";
 import { runTool } from "../t0/exec.ts";
@@ -303,21 +303,51 @@ async function fromYarnLock(worktree: string): Promise<Sbom | undefined> {
   if (pinned === undefined) {
     return { components: [], source: "yarn-lock", note: "cdxgen not available; read yarn.lock directly.", incomplete: "yarn.lock exists but is neither a v1 nor a berry lockfile — this reader could not enumerate it" };
   }
-  // A package.json that does not parse leaves directness unknown, never the SBOM unread.
-  const manifest = await readFile(join(worktree, "package.json"), "utf8")
-    .then((t) => JSON.parse(t) as Record<string, unknown>)
-    .catch(() => ({}) as Record<string, unknown>);
-  const direct = new Set(
-    ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].flatMap((k) => {
-      const v = manifest[k];
-      return typeof v === "object" && v !== null ? Object.keys(v) : [];
-    }),
-  );
+  const direct = await directDependencies(worktree);
   return {
-    components: pinned.map((p) => ({ name: p.name, version: p.version, ecosystem: "npm" as const, transitive: !direct.has(p.name) })),
+    components: pinned.map((p) => ({ name: p.name, version: p.version, ecosystem: "npm" as const, transitive: direct === undefined ? undefined : !direct.has(p.name) })),
     source: "yarn-lock",
     note: "cdxgen not available; read yarn.lock directly. Dev/prod scope is not distinguished.",
+    // UNKNOWN, NOT "TRANSITIVE": read as an empty set, every package looked transitive, and a
+    // reader that asks about direct dependencies only asked about none, silently.
+    ...(direct === undefined ? { incomplete: "the root package.json did not parse, so which dependencies are direct is unknown" } : {}),
   };
+}
+
+const DEP_KEYS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] as const;
+
+/**
+ * Every name the project lists itself — the root manifest AND its workspace packages', since in
+ * a workspaces monorepo the root lists only `workspaces` and the real dependencies live one
+ * level down. `undefined` when the root manifest cannot be read as JSON: directness unknown.
+ * Workspace patterns are a directory or `dir/*`, which is what monorepos write in practice.
+ */
+async function directDependencies(worktree: string): Promise<ReadonlySet<string> | undefined> {
+  const read = async (rel: string): Promise<Record<string, unknown> | undefined> =>
+    readFile(join(worktree, rel), "utf8").then((t) => JSON.parse(t) as Record<string, unknown>).catch(() => undefined);
+  const root = await read("package.json");
+  if (root === undefined) return undefined;
+  const names = new Set<string>();
+  const add = (m: Record<string, unknown>) => {
+    for (const k of DEP_KEYS) {
+      const v = m[k];
+      if (typeof v === "object" && v !== null) for (const n of Object.keys(v)) names.add(n);
+    }
+  };
+  add(root);
+  const ws = root["workspaces"];
+  const patterns = Array.isArray(ws) ? ws : typeof ws === "object" && ws !== null && Array.isArray((ws as { packages?: unknown }).packages) ? (ws as { packages: unknown[] }).packages : [];
+  for (const pat of patterns) {
+    if (typeof pat !== "string") continue;
+    const dirs = pat.endsWith("/*")
+      ? await readdir(join(worktree, pat.slice(0, -2)), { withFileTypes: true }).then((es) => es.filter((e) => e.isDirectory()).map((e) => `${pat.slice(0, -2)}/${e.name}`)).catch(() => [])
+      : [pat];
+    for (const d of dirs) {
+      const m = await read(`${d}/package.json`);
+      if (m !== undefined) add(m);
+    }
+  }
+  return names;
 }
 
 function toComponent(
